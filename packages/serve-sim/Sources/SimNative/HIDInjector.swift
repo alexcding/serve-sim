@@ -44,6 +44,8 @@ actor HIDInjector {
     private var digitizerCapability: CoreDeviceCapabilityObject?
     private var keyboardCapability: CoreDeviceCapabilityObject?
     private var touchTarget = HIDTargetPolicy()
+    /// Xcode 27's `dtuhidd`, once it answers: input sent the legacy way is dropped by then.
+    private var dtuhid: DTUHIDTransport?
     private var multiTouchTarget = HIDTargetPolicy()
 
     // IndigoHIDMessageForMouseNSEvent(CGPoint*, CGPoint*, IndigoHIDTarget, NSEventType, NSSize, IndigoHIDEdge)
@@ -192,6 +194,17 @@ actor HIDInjector {
         self.sendSel = NSSelectorFromString("sendWithMessage:freeWhenDone:completionQueue:completion:")
         hidLog("[hid] SimDeviceLegacyHIDClient created")
         hidLog("[hid] IndigoHIDMessageForMouseNSEvent loaded (with edge gesture support)")
+
+        // Foldables already go through CoreDevice. The legacy client stays for what dtuhidd has no
+        // event for (Digital Crown, the software-keyboard toggle).
+        if !isFoldable, DTUHIDTransport.supported {
+            do {
+                dtuhid = try await DTUHIDTransport.connect(device: device)
+                print("[hid] Input goes through dtuhidd")
+            } catch {
+                print("[hid] dtuhidd unavailable, input goes the legacy way: \(error.localizedDescription)")
+            }
+        }
     }
 
     /// Keep panel metadata aligned with capture and select the transport’s service.
@@ -261,6 +274,10 @@ actor HIDInjector {
             sendUniversalTouches(target: target, type: type, contacts: [.init(x: x, y: y)], edge: edge)
             return
         }
+        if let dtuhid {
+            dtuhid.sendTouch(type: type, x: x, y: y, edge: edge)
+            return
+        }
         guard let mouseFunc else { return }
         let eventType: Int32
         switch type {
@@ -284,6 +301,10 @@ actor HIDInjector {
         if isFoldable {
             sendUniversalTouches(target: target, type: type,
                                  contacts: [.init(x: x1, y: y1), .init(x: x2, y: y2)])
+            return
+        }
+        if let dtuhid {
+            dtuhid.sendTwoFingerTouch(type: type, x1: x1, y1: y1, x2: x2, y2: y2)
             return
         }
         guard let mouseFunc else { return }
@@ -331,12 +352,26 @@ actor HIDInjector {
     /// Synchronously build + send a hardware-button message. Call only inside an
     /// `inputQueue` block (button sequences below run there).
     private func sendHIDButton(eventSource: Int32, direction: Int32) {
+        if let dtuhid, let usage = Self.consumerUsage(eventSource: eventSource) {
+            dtuhid.sendButton(page: 0x0C, usage: usage, down: direction == Self.buttonDown)
+            return
+        }
         guard let buttonFunc = buttonFunc else { return }
         guard let msg = buttonFunc(eventSource, direction, Self.buttonTargetHardware) else {
             print("[hid] IndigoHIDMessageForButton returned nil")
             return
         }
         rawSend(msg)
+    }
+
+    /// A legacy button source's HID Consumer-page usage, for dtuhidd (as idb maps them).
+    private static func consumerUsage(eventSource: Int32) -> UInt32? {
+        switch eventSource {
+        case buttonSourceHome: return 0x40          // Menu
+        case buttonSourceLock, buttonSourceSideButton: return 0x30  // Power
+        case buttonSourceSiri: return 0xCF          // Voice Command
+        default: return nil
+        }
     }
 
     // MARK: - Keyboard events
@@ -362,6 +397,11 @@ actor HIDInjector {
                 return
             }
             hidLog("[hid] Key \(type) usage=0x\(String(usage, radix: 16))")
+            return
+        }
+        if let dtuhid {
+            dtuhid.sendKey(usage: usage, down: direction == 1)
+            hidLog("[hid] Key \(type) usage=0x\(String(usage, radix: 16)) via dtuhidd")
             return
         }
 
@@ -504,6 +544,17 @@ actor HIDInjector {
     /// - phase: "down" / "up" hold the button for natural long-presses (power
     ///   off slider, side-button menus); "press" sends a momentary down+up.
     func sendButtonHID(page: UInt32, usage: UInt32, phase: String) async {
+        if let dtuhid {
+            switch phase {
+            case "down": dtuhid.sendButton(page: page, usage: usage, down: true)
+            case "up":   dtuhid.sendButton(page: page, usage: usage, down: false)
+            default:
+                dtuhid.sendButton(page: page, usage: usage, down: true)
+                try? await Task.sleep(for: .seconds(0.05))
+                dtuhid.sendButton(page: page, usage: usage, down: false)
+            }
+            return
+        }
         guard let arb = hidArbitraryFunc else {
             print("[hid] Arbitrary HID injection unavailable (page=\(page) usage=\(usage))")
             return
