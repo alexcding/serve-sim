@@ -1,6 +1,6 @@
 {
-  "name": "@expo/serve-sim",
-  "version": "0.3.4",
+  "name": "@alexcding/serve-sim",
+  "version": "0.3.5",
   "type": "module",
   "author": {
     "name": "Evan Bacon",
@@ -10,16 +10,15 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/expo/serve-sim.git",
+    "url": "git+https://github.com/alexcding/serve-sim.git",
     "directory": "packages/serve-sim"
   },
-  "homepage": "https://github.com/expo/serve-sim#readme",
+  "homepage": "https://github.com/alexcding/serve-sim#readme",
   "bugs": {
-    "url": "https://github.com/expo/serve-sim/issues"
+    "url": "https://github.com/alexcding/serve-sim/issues"
   },
   "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "access": "public"
   },
   "bin": {
     "serve-sim": "dist/serve-sim.js"
